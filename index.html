@@ -125,7 +125,7 @@
 
         // Gemini API Client using fetch
         async function callGemini(apiKey, query) {
-          const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-pro-preview:generateContent?key=${apiKey}`;
+          const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
           const payload = {
             contents: [{
               parts: [{
@@ -187,6 +187,9 @@
 
           if (!response.ok) {
             const err = await response.json();
+            if (response.status === 429 || (err.error && err.error.message && err.error.message.includes('quota'))) {
+              throw new Error('QUOTA_EXCEEDED');
+            }
             throw new Error(err.error?.message || 'APIリクエストに失敗しました');
           }
 
@@ -258,7 +261,11 @@
               }
             } catch (err) {
               console.error(err);
-              setError(err.message || '情報の取得に失敗しました。');
+              if (err.message === 'QUOTA_EXCEEDED') {
+                setError('現在混み合っています。少し時間を置いてから再度お試しいただくか、設定からAPIキーを確認してください。');
+              } else {
+                setError(err.message || '情報の取得に失敗しました。');
+              }
             } finally {
               setLoading(false);
             }
