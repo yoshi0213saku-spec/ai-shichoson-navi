@@ -5,24 +5,16 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>AI市町村ナビ</title>
   
-  <!-- Libraries -->
+  <!-- CSS Libraries -->
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <script src="https://cdn.tailwindcss.com"></script>
   
-  <script type="importmap">
-  {
-    "imports": {
-      "react": "https://esm.sh/react@18.2.0",
-      "react-dom": "https://esm.sh/react-dom@18.2.0",
-      "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
-      "react-leaflet": "https://esm.sh/react-leaflet@4.2.1",
-      "leaflet": "https://esm.sh/leaflet@1.9.4",
-      "lucide-react": "https://esm.sh/lucide-react@0.344.0",
-      "@google/genai": "https://esm.sh/@google/genai@0.2.1",
-      "framer-motion": "https://esm.sh/framer-motion@10.16.4"
-    }
-  }
-  </script>
+  <!-- JS Libraries (UMD/Global) -->
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <script src="https://unpkg.com/lucide-react@latest/dist/umd/lucide-react.js"></script>
 
   <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
@@ -34,10 +26,13 @@
       margin: 0;
     }
 
-    .leaflet-container {
+    #map {
       width: 100%;
-      height: 100%;
-      background: #f1f5f9 !important;
+      height: 320px;
+      background: #f1f5f9;
+      border-radius: 0.75rem;
+      border: 1px solid #e2e8f0;
+      z-index: 1;
     }
 
     /* Custom scrollbar */
@@ -75,75 +70,113 @@
 <body>
   <div id="root"></div>
 
-  <script type="module">
-    import React, { useState, useEffect } from 'react';
-    import { createRoot } from 'react-dom/client';
-    import { MapContainer, TileLayer, CircleMarker, Popup, useMap, GeoJSON } from 'react-leaflet';
-    import L from 'leaflet';
-    import { 
-      Search, MapPin, Users, Info, Settings, Loader2, 
-      Download, Landmark, Compass, UserCircle2, Map as MapIcon
-    } from 'lucide-react';
-    import { GoogleGenAI, Type } from "@google/genai";
-    import { motion, AnimatePresence } from 'framer-motion';
+  <script>
+    // Global variables from UMD builds
+    const { useState, useEffect, useRef, createElement: h } = window.React;
+    const { createRoot } = window.ReactDOM;
+    const L = window.L;
+    const Lucide = window.LucideReact;
 
-    // Leaflet Icon Fix
-    const DefaultIcon = L.icon({
-      iconUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png',
-      shadowUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
-      iconSize: [25, 41],
-      iconAnchor: [12, 41],
-    });
-    L.Marker.prototype.options.icon = DefaultIcon;
+    // Gemini API Client using fetch
+    async function callGemini(apiKey, query) {
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-pro-preview:generateContent?key=${apiKey}`;
+      const payload = {
+        contents: [{
+          parts: [{
+            text: `日本の自治体「${query}」について、Google検索を使用して最新かつ正確な情報を取得し、それに基づき詳しく解説してください。\n特に以下の点に厳格に従ってください：\n1. **事実確認の徹底**: 観光名所、地理的特徴、ゆかりの人物が、確実にその自治体の境界内にあることをGoogle検索で確認してください。隣接自治体との混同は絶対に避けてください。\n2. **根拠のない情報の排除**: 検索結果で確認できない情報は「不明」とするか、出力を控えてください。架空の人物やエピソードを捏造しないでください。\n3. **統計の正確性**: 人口や予算などは、可能な限り最新の公的な数値を反映してください。`
+          }]
+        }],
+        tools: [{ googleSearch: {} }],
+        generationConfig: {
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: "OBJECT",
+            properties: {
+              name: { type: "STRING" },
+              prefecture: { type: "STRING" },
+              description: { type: "STRING" },
+              tourism: { type: "STRING" },
+              people: {
+                type: "ARRAY",
+                items: {
+                  type: "OBJECT",
+                  properties: {
+                    name: { type: "STRING" },
+                    bio: { type: "STRING" }
+                  },
+                  required: ["name", "bio"]
+                }
+              },
+              population: {
+                type: "OBJECT",
+                properties: {
+                  total: { type: "STRING", description: "総人口（例：2,965人）" },
+                  male: { type: "STRING", description: "男（例：1,572人）" },
+                  female: { type: "STRING", description: "女（例：1,393人）" },
+                  agingRate: { type: "STRING", description: "高齢化率（例：43.1%）" }
+                },
+                required: ["total", "male", "female", "agingRate"]
+              },
+              budget: {
+                type: "OBJECT",
+                properties: {
+                  amount: { type: "STRING", description: "予算規模（例：33億1,000万円）" },
+                  description: { type: "STRING", description: "予算の説明（例：令和6年度の一般会計当初予算額です。）" }
+                },
+                required: ["amount", "description"]
+              },
+              lat: { type: "NUMBER" },
+              lng: { type: "NUMBER" }
+            },
+            required: ["name", "prefecture", "description", "tourism", "people", "population", "budget", "lat", "lng"]
+          }
+        }
+      };
 
-    function ChangeView({ center, zoom }) {
-      const map = useMap();
-      useEffect(() => {
-        map.setView(center, zoom);
-        // 地図のサイズを再計算して表示崩れを防ぐ
-        setTimeout(() => {
-          map.invalidateSize();
-        }, 200);
-      }, [center, zoom, map]);
-      return null;
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+
+      if (!response.ok) {
+        const err = await response.json();
+        throw new Error(err.error?.message || 'API call failed');
+      }
+
+      const result = await response.json();
+      return JSON.parse(result.candidates[0].content.parts[0].text);
     }
 
     function App() {
-      const [apiKey, setApiKey] = useState('');
-      const [showSettings, setShowSettings] = useState(false);
+      const [apiKey, setApiKey] = useState(localStorage.getItem('gemini_api_key') || '');
+      const [showSettings, setShowSettings] = useState(!localStorage.getItem('gemini_api_key'));
       const [query, setQuery] = useState('');
       const [loading, setLoading] = useState(false);
       const [data, setData] = useState(null);
-      const [coords, setCoords] = useState([36.2048, 138.2529]);
-      const [zoom, setZoom] = useState(5);
       const [error, setError] = useState(null);
-      const [geoJsonData, setGeoJsonData] = useState(null);
+      
+      const mapRef = useRef(null);
+      const markerRef = useRef(null);
+      const geoJsonRef = useRef(null);
 
-      // Helper to render value with small unit
-      const renderValueWithSmallUnit = (value, baseSize = "text-4xl") => {
-        if (!value || value === '---') return value;
-        
-        // Regex to split number and units like 人, 万円, 億円
-        const parts = value.split(/([人|万円|億円|%]+)/);
-        return React.createElement('span', { className: baseSize + ' font-bold text-slate-800' },
-          parts.map((part, i) => {
-            if (['人', '万円', '億円', '%'].includes(part)) {
-              return React.createElement('span', { key: i, className: 'text-sm font-medium text-slate-400 ml-0.5' }, part);
-            }
-            return part;
-          })
-        );
-      };
-
+      // Initialize Map
       useEffect(() => {
-        const savedKey = localStorage.getItem('gemini_api_key');
-        if (savedKey) setApiKey(savedKey);
-        else setShowSettings(true);
+        if (!mapRef.current) {
+          mapRef.current = L.map('map').setView([36.2048, 138.2529], 5);
+          L.tileLayer('https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}{r}.png', {
+            attribution: '&copy; OpenStreetMap contributors &copy; CARTO'
+          }).addTo(mapRef.current);
 
-        fetch('https://raw.githubusercontent.com/niiyz/JapanGeoJson/master/japan.json')
-          .then(res => res.json())
-          .then(data => setGeoJsonData(data))
-          .catch(err => console.error('GeoJSON load error:', err));
+          // Load Japan GeoJSON
+          fetch('https://raw.githubusercontent.com/niiyz/JapanGeoJson/master/japan.json')
+            .then(res => res.json())
+            .then(geoData => {
+              geoJsonRef.current = L.geoJSON(geoData, {
+                style: { color: '#10b981', weight: 1, fillColor: '#10b981', fillOpacity: 0.05 }
+              }).addTo(mapRef.current);
+            });
+        }
       }, []);
 
       const saveApiKey = () => {
@@ -154,76 +187,34 @@
       const handleSearch = async (e) => {
         e.preventDefault();
         if (!query.trim()) return;
-        if (!apiKey) {
-          setShowSettings(true);
-          return;
-        }
+        if (!apiKey) { setShowSettings(true); return; }
 
         setLoading(true);
         setError(null);
 
         try {
-          const genAI = new GoogleGenAI({ apiKey });
-          const model = "gemini-3.1-pro-preview"; // より高度な推論モデルに変更
-          
-          const response = await genAI.models.generateContent({
-            model: model,
-            contents: `日本の自治体「${query}」について、Google検索を使用して最新かつ正確な情報を取得し、それに基づき詳しく解説してください。
-特に以下の点に厳格に従ってください：
-1. **事実確認の徹底**: 観光名所、地理的特徴、ゆかりの人物が、確実にその自治体の境界内にあることをGoogle検索で確認してください。隣接自治体との混同は絶対に避けてください。
-2. **根拠のない情報の排除**: 検索結果で確認できない情報は「不明」とするか、出力を控えてください。架空の人物やエピソードを捏造しないでください。
-3. **統計の正確性**: 人口や予算などは、可能な限り最新の公的な数値を反映してください。`,
-            config: {
-              tools: [{ googleSearch: {} }], // Google検索による裏付けを有効化
-              responseMimeType: "application/json",
-              responseSchema: {
-                type: Type.OBJECT,
-                properties: {
-                  name: { type: Type.STRING },
-                  prefecture: { type: Type.STRING },
-                  description: { type: Type.STRING },
-                  tourism: { type: Type.STRING },
-                  people: {
-                    type: Type.ARRAY,
-                    items: {
-                      type: Type.OBJECT,
-                      properties: {
-                        name: { type: Type.STRING },
-                        bio: { type: Type.STRING }
-                      },
-                      required: ["name", "bio"]
-                    }
-                  },
-                  population: {
-                    type: Type.OBJECT,
-                    properties: {
-                      total: { type: Type.STRING, description: "総人口（例：2,965人）" },
-                      male: { type: Type.STRING, description: "男（例：1,572人）" },
-                      female: { type: Type.STRING, description: "女（例：1,393人）" },
-                      agingRate: { type: Type.STRING, description: "高齢化率（例：43.1%）" }
-                    },
-                    required: ["total", "male", "female", "agingRate"]
-                  },
-                  budget: {
-                    type: Type.OBJECT,
-                    properties: {
-                      amount: { type: Type.STRING, description: "予算規模（例：33億1,000万円）" },
-                      description: { type: Type.STRING, description: "予算の説明（例：令和6年度の一般会計当初予算額です。）" }
-                    },
-                    required: ["amount", "description"]
-                  },
-                  lat: { type: Type.NUMBER },
-                  lng: { type: Type.NUMBER }
-                },
-                required: ["name", "prefecture", "description", "tourism", "people", "population", "budget", "lat", "lng"]
-              }
-            }
-          });
-
-          const result = JSON.parse(response.text);
+          const result = await callGemini(apiKey, query);
           setData(result);
-          setCoords([result.lat, result.lng]);
-          setZoom(5); // 日本全景を表示
+
+          // Update Map
+          if (mapRef.current) {
+            const pos = [result.lat, result.lng];
+            mapRef.current.setView(pos, 5);
+            
+            if (markerRef.current) {
+              markerRef.current.remove();
+            }
+            
+            markerRef.current = L.circleMarker(pos, {
+              color: '#ff0000',
+              fillColor: '#ff0000',
+              fillOpacity: 0.9,
+              weight: 2,
+              radius: 10
+            }).addTo(mapRef.current);
+
+            setTimeout(() => mapRef.current.invalidateSize(), 200);
+          }
         } catch (err) {
           console.error(err);
           setError('情報の取得に失敗しました。APIキーを確認してください。');
@@ -234,65 +225,16 @@
 
       const saveReport = (format = 'html') => {
         if (!data) return;
-        
         let content = '';
         let mimeType = '';
         let extension = '';
 
         if (format === 'html') {
-          content = `
-            <!DOCTYPE html>
-            <html>
-            <head>
-              <meta charset="utf-8">
-              <title>${data.name} レポート</title>
-              <style>
-                body { font-family: sans-serif; padding: 40px; color: #334155; line-height: 1.6; }
-                h1 { color: #10b981; border-bottom: 2px solid #10b981; padding-bottom: 10px; }
-                .section { margin-bottom: 30px; }
-                .label { font-weight: bold; color: #64748b; }
-                .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
-                .card { border: 1px solid #e2e8f0; padding: 15px; border-radius: 8px; }
-              </style>
-            </head>
-            <body>
-              <h1>${data.name} (${data.prefecture})</h1>
-              <div class="section"><p>${data.description}</p></div>
-              <div class="section"><h2>観光・地域の特徴</h2><p>${data.tourism}</p></div>
-              <div class="section"><h2>人口統計</h2><div class="grid"><div class="card"><span class="label">総人口:</span> ${data.population.total}</div><div class="card"><span class="label">高齢化率:</span> ${data.population.agingRate}</div></div></div>
-              <div class="section"><h2>予算規模</h2><p>${data.budget.amount} (${data.budget.description})</p></div>
-            </body>
-            </html>
-          `;
+          content = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${data.name} レポート</title><style>body { font-family: sans-serif; padding: 40px; color: #334155; line-height: 1.6; } h1 { color: #10b981; border-bottom: 2px solid #10b981; padding-bottom: 10px; } .section { margin-bottom: 30px; } .label { font-weight: bold; color: #64748b; } .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; } .card { border: 1px solid #e2e8f0; padding: 15px; border-radius: 8px; }</style></head><body><h1>${data.name} (${data.prefecture})</h1><div class="section"><p>${data.description}</p></div><div class="section"><h2>観光・地域の特徴</h2><p>${data.tourism}</p></div><div class="section"><h2>人口統計</h2><div class="grid"><div class="card"><span class="label">総人口:</span> ${data.population.total}</div><div class="card"><span class="label">高齢化率:</span> ${data.population.agingRate}</div></div></div><div class="section"><h2>予算規模</h2><p>${data.budget.amount} (${data.budget.description})</p></div></body></html>`;
           mimeType = 'text/html';
           extension = 'html';
         } else {
-          content = `【${data.name} 自治体レポート】
-都道府県: ${data.prefecture}
-
-■ 概要
-${data.description}
-
-■ 観光・地域の特徴
-${data.tourism}
-
-■ 人口統計 (2023年)
-・総人口: ${data.population.total}
-・男: ${data.population.male}
-・女: ${data.population.female}
-・高齢化率: ${data.population.agingRate}
-
-■ 予算規模 (2024年度)
-・予算額: ${data.budget.amount}
-・詳細: ${data.budget.description}
-
-■ ゆかりのある人物
-${data.people.map(p => `・${p.name}: ${p.bio}`).join('\n')}
-
----
-生成日: ${new Date().toLocaleDateString('ja-JP')}
-AI市町村ナビ 制作委員会
-`;
+          content = `【${data.name} 自治体レポート】\n都道府県: ${data.prefecture}\n\n■ 概要\n${data.description}\n\n■ 観光・地域の特徴\n${data.tourism}\n\n■ 人口統計 (2023年)\n・総人口: ${data.population.total}\n・男: ${data.population.male}\n・女: ${data.population.female}\n・高齢化率: ${data.population.agingRate}\n\n■ 予算規模 (2024年度)\n・予算額: ${data.budget.amount}\n・詳細: ${data.budget.description}\n\n■ ゆかりのある人物\n${data.people.map(p => `・${p.name}: ${p.bio}`).join('\n')}\n\n---\n生成日: ${new Date().toLocaleDateString('ja-JP')}\nAI市町村ナビ 制作委員会\n`;
           mimeType = 'text/plain';
           extension = 'txt';
         }
@@ -306,189 +248,174 @@ AI市町村ナビ 制作委員会
         URL.revokeObjectURL(url);
       };
 
-      return React.createElement('div', { className: 'min-h-screen flex flex-col' },
+      const renderValueWithSmallUnit = (value, baseSize = "text-4xl") => {
+        if (!value || value === '---') return value;
+        const parts = value.split(/([人|万円|億円|%]+)/);
+        return h('span', { className: baseSize + ' font-bold text-slate-800' },
+          parts.map((part, i) => {
+            if (['人', '万円', '億円', '%'].includes(part)) {
+              return h('span', { key: i, className: 'text-sm font-medium text-slate-400 ml-0.5' }, part);
+            }
+            return part;
+          })
+        );
+      };
+
+      return h('div', { className: 'min-h-screen flex flex-col' },
         // Header
-        React.createElement('header', { className: 'bg-white border-b border-slate-200 py-4 px-6 sticky top-0 z-50' },
-          React.createElement('div', { className: 'max-w-7xl mx-auto flex flex-col sm:flex-row justify-between items-center gap-4' },
-            React.createElement('div', { className: 'flex items-center gap-2' },
-              React.createElement('div', { className: 'w-8 h-8 bg-brand rounded-lg flex items-center justify-center text-white' },
-                React.createElement(Compass, { className: 'w-5 h-5' })
+        h('header', { className: 'bg-white border-b border-slate-200 py-4 px-6 sticky top-0 z-50' },
+          h('div', { className: 'max-w-7xl mx-auto flex flex-col sm:flex-row justify-between items-center gap-4' },
+            h('div', { className: 'flex items-center gap-2' },
+              h('div', { className: 'w-8 h-8 bg-brand rounded-lg flex items-center justify-center text-white' },
+                h(Lucide.Compass, { size: 20 })
               ),
-              React.createElement('h1', { className: 'text-xl font-bold tracking-tight text-slate-800' }, '市町村ナビ')
+              h('h1', { className: 'text-xl font-bold tracking-tight text-slate-800' }, '市町村ナビ')
             ),
-            React.createElement('div', { className: 'flex items-center gap-3 w-full sm:w-auto' },
-              React.createElement('form', { onSubmit: handleSearch, className: 'relative flex-1 sm:w-80' },
-                React.createElement(Search, { className: 'absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400' }),
-                React.createElement('input', {
+            h('div', { className: 'flex items-center gap-3 w-full sm:w-auto' },
+              h('form', { onSubmit: handleSearch, className: 'relative flex-1 sm:w-80' },
+                h(Lucide.Search, { size: 16, className: 'absolute left-3 top-1/2 -translate-y-1/2 text-slate-400' }),
+                h('input', {
                   type: 'text',
                   value: query,
                   onChange: (e) => setQuery(e.target.value),
                   placeholder: '南相木村',
                   className: 'w-full pl-10 pr-4 py-2 bg-slate-100 border-none rounded-full focus:ring-2 focus:ring-brand/20 focus:outline-none text-sm'
                 }),
-                React.createElement('button', {
+                h('button', {
                   type: 'submit',
                   disabled: loading,
                   className: 'absolute right-1 top-1/2 -translate-y-1/2 bg-brand text-white px-4 py-1 rounded-full text-xs font-bold hover:bg-brand/90 transition-colors disabled:opacity-50'
-                }, loading ? React.createElement(Loader2, { className: 'w-3 h-3 animate-spin' }) : '検索')
+                }, loading ? h(Lucide.Loader2, { size: 12, className: 'animate-spin' }) : '検索')
               ),
-              React.createElement('button', {
+              h('button', {
                 onClick: () => setShowSettings(!showSettings),
                 className: 'p-2 text-slate-400 hover:text-slate-600 transition-colors'
-              }, React.createElement(Settings, { className: 'w-5 h-5' }))
+              }, h(Lucide.Settings, { size: 20 }))
             )
           )
         ),
 
-        // Settings Drawer
-        React.createElement(AnimatePresence, {},
-          showSettings && React.createElement(motion.div, {
-            initial: { height: 0, opacity: 0 },
-            animate: { height: 'auto', opacity: 1 },
-            exit: { height: 0, opacity: 0 },
-            className: 'bg-slate-50 border-b border-slate-200 overflow-hidden'
-          },
-            React.createElement('div', { className: 'max-w-7xl mx-auto p-6' },
-              React.createElement('div', { className: 'flex flex-col sm:flex-row gap-3 items-end' },
-                React.createElement('div', { className: 'flex-1 w-full' },
-                  React.createElement('label', { className: 'block text-xs font-bold text-slate-500 mb-1 uppercase tracking-wider' }, 'Gemini API Key'),
-                  React.createElement('input', {
-                    type: 'password',
-                    value: apiKey,
-                    onChange: (e) => setApiKey(e.target.value),
-                    placeholder: 'Enter your API key',
-                    className: 'w-full px-4 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand/20 bg-white'
-                  })
-                ),
-                React.createElement('button', {
-                  onClick: saveApiKey,
-                  className: 'bg-slate-800 text-white px-6 py-2 rounded-lg hover:bg-slate-700 transition-colors font-bold text-sm'
-                }, 'Save')
-              )
+        // Settings
+        showSettings && h('div', { className: 'bg-slate-50 border-b border-slate-200 transition-all' },
+          h('div', { className: 'max-w-7xl mx-auto p-6' },
+            h('div', { className: 'flex flex-col sm:flex-row gap-3 items-end' },
+              h('div', { className: 'flex-1 w-full' },
+                h('label', { className: 'block text-xs font-bold text-slate-500 mb-1 uppercase tracking-wider' }, 'Gemini API Key'),
+                h('input', {
+                  type: 'password',
+                  value: apiKey,
+                  onChange: (e) => setApiKey(e.target.value),
+                  placeholder: 'Enter your API key',
+                  className: 'w-full px-4 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand/20 bg-white'
+                })
+              ),
+              h('button', {
+                onClick: saveApiKey,
+                className: 'bg-slate-800 text-white px-6 py-2 rounded-lg hover:bg-slate-700 transition-colors font-bold text-sm'
+              }, 'Save')
             )
           )
         ),
 
-        // Main Content
-        React.createElement('main', { className: 'flex-1 max-w-7xl w-full mx-auto p-6' },
-          error && React.createElement('div', { className: 'bg-red-50 border border-red-200 text-red-600 px-4 py-3 rounded-xl mb-6 flex items-center gap-2' },
-            React.createElement(Info, { className: 'w-4 h-4' }), error
+        // Main
+        h('main', { className: 'flex-1 max-w-7xl w-full mx-auto p-6' },
+          error && h('div', { className: 'bg-red-50 border border-red-200 text-red-600 px-4 py-3 rounded-xl mb-6 flex items-center gap-2 text-sm' },
+            h(Lucide.Info, { size: 16 }), error
           ),
 
-          React.createElement('div', { className: 'grid grid-cols-1 lg:grid-cols-12 gap-6' },
-            // Left Column
-            React.createElement('div', { className: 'lg:col-span-4 space-y-6' },
-              React.createElement('div', { className: 'bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden' },
-                React.createElement('div', { className: 'p-6' },
-                  React.createElement('div', { className: 'flex items-baseline gap-2 mb-2' },
-                    React.createElement('h2', { className: 'text-2xl font-bold text-slate-800' }, data?.name || '---'),
-                    React.createElement('span', { className: 'text-sm text-slate-400 font-medium' }, data?.prefecture || '---')
-                  ),
-                  React.createElement('p', { className: 'text-sm text-slate-500 leading-relaxed mb-6' },
-                    data?.description || '市町村を検索して情報を表示してください。'
-                  ),
-                  React.createElement('div', { className: 'h-80 bg-slate-50 rounded-xl overflow-hidden relative border border-slate-100 mb-6' },
-                    React.createElement(MapContainer, { center: coords, zoom: zoom, scrollWheelZoom: true },
-                      React.createElement(TileLayer, {
-                        attribution: '&copy; OSM',
-                        url: 'https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}{r}.png'
-                      }),
-                      geoJsonData && React.createElement(GeoJSON, {
-                        data: geoJsonData,
-                        style: { color: '#10b981', weight: 1, fillColor: '#10b981', fillOpacity: 0.05 }
-                      }),
-                      data && React.createElement(CircleMarker, {
-                        center: coords,
-                        pathOptions: { color: '#ff0000', fillColor: '#ff0000', fillOpacity: 0.9, weight: 2 },
-                        radius: 10
-                      }),
-                      React.createElement(ChangeView, { center: coords, zoom: zoom })
-                    ),
-                    React.createElement('div', { className: 'absolute bottom-2 left-2 z-[1000] bg-white/80 backdrop-blur px-2 py-1 rounded text-[10px] font-bold text-slate-400' }, 'ILLUSTRATIVE MAP')
-                  ),
-                  React.createElement('div', { className: 'space-y-2' },
-                    React.createElement('button', {
-                      onClick: () => saveReport('html'),
-                      disabled: !data,
-                      className: 'w-full flex items-center justify-center gap-2 py-3 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-xl transition-colors text-sm font-bold disabled:opacity-50'
-                    }, React.createElement(Download, { className: 'w-4 h-4' }), ' レポートを保存 (HTML形式)'),
-                    
-                    React.createElement('button', {
-                      onClick: () => saveReport('text'),
-                      disabled: !data,
-                      className: 'w-full flex items-center justify-center gap-2 py-3 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-xl transition-colors text-sm font-bold disabled:opacity-50'
-                    }, React.createElement(Download, { className: 'w-4 h-4' }), ' レポートを保存 (テキスト形式)')
-                  )
+          h('div', { className: 'grid grid-cols-1 lg:grid-cols-12 gap-6' },
+            // Left
+            h('div', { className: 'lg:col-span-4 space-y-6' },
+              h('div', { className: 'bg-white rounded-2xl shadow-sm border border-slate-200 p-6' },
+                h('div', { className: 'flex items-baseline gap-2 mb-2' },
+                  h('h2', { className: 'text-2xl font-bold text-slate-800' }, data ? data.name : '---'),
+                  h('span', { className: 'text-sm text-slate-400 font-medium' }, data ? data.prefecture : '---')
+                ),
+                h('p', { className: 'text-sm text-slate-500 leading-relaxed mb-6' },
+                  data ? data.description : '市町村を検索して情報を表示してください。'
+                ),
+                h('div', { id: 'map', className: 'mb-6' }),
+                h('div', { className: 'space-y-2' },
+                  h('button', {
+                    onClick: () => saveReport('html'),
+                    disabled: !data,
+                    className: 'w-full flex items-center justify-center gap-2 py-3 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-xl transition-colors text-sm font-bold disabled:opacity-50'
+                  }, h(Lucide.Download, { size: 16 }), ' レポートを保存 (HTML形式)'),
+                  h('button', {
+                    onClick: () => saveReport('text'),
+                    disabled: !data,
+                    className: 'w-full flex items-center justify-center gap-2 py-3 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-xl transition-colors text-sm font-bold disabled:opacity-50'
+                  }, h(Lucide.Download, { size: 16 }), ' レポートを保存 (テキスト形式)')
                 )
               ),
 
-              // Population Card
-              React.createElement('div', { className: 'bg-white rounded-2xl shadow-sm border border-slate-200 p-6' },
-                React.createElement('div', { className: 'flex items-center justify-between mb-6' },
-                  React.createElement('div', { className: 'flex items-center gap-2 text-brand font-bold text-sm' },
-                    React.createElement(Users, { className: 'w-4 h-4' }), ' 人口統計'
+              // Population
+              h('div', { className: 'bg-white rounded-2xl shadow-sm border border-slate-200 p-6' },
+                h('div', { className: 'flex items-center justify-between mb-6' },
+                  h('div', { className: 'flex items-center gap-2 text-brand font-bold text-sm' },
+                    h(Lucide.Users, { size: 16 }), ' 人口統計'
                   ),
-                  React.createElement('span', { className: 'text-[10px] text-slate-300 font-bold uppercase tracking-widest' }, '2023年')
+                  h('span', { className: 'text-[10px] text-slate-300 font-bold uppercase tracking-widest' }, '2023年')
                 ),
-                React.createElement('div', { className: 'mb-6' },
-                  renderValueWithSmallUnit(data?.population.total, 'text-4xl'),
-                  React.createElement('div', { className: 'text-[10px] text-slate-400 font-bold uppercase mt-1' }, '総人口')
+                h('div', { className: 'mb-6' },
+                  renderValueWithSmallUnit(data ? data.population.total : '---', 'text-4xl'),
+                  h('div', { className: 'text-[10px] text-slate-400 font-bold uppercase mt-1' }, '総人口')
                 ),
-                React.createElement('div', { className: 'grid grid-cols-2 gap-4 border-t border-slate-100 pt-6 mb-6' },
-                  React.createElement('div', {},
-                    renderValueWithSmallUnit(data?.population.male, 'text-lg'),
-                    React.createElement('div', { className: 'text-[10px] text-slate-400 font-bold uppercase mt-1' }, '男')
+                h('div', { className: 'grid grid-cols-2 gap-4 border-t border-slate-100 pt-6 mb-6' },
+                  h('div', {},
+                    renderValueWithSmallUnit(data ? data.population.male : '---', 'text-lg'),
+                    h('div', { className: 'text-[10px] text-slate-400 font-bold uppercase mt-1' }, '男')
                   ),
-                  React.createElement('div', {},
-                    renderValueWithSmallUnit(data?.population.female, 'text-lg'),
-                    React.createElement('div', { className: 'text-[10px] text-slate-400 font-bold uppercase mt-1' }, '女')
+                  h('div', {},
+                    renderValueWithSmallUnit(data ? data.population.female : '---', 'text-lg'),
+                    h('div', { className: 'text-[10px] text-slate-400 font-bold uppercase mt-1' }, '女')
                   )
                 ),
-                React.createElement('div', { className: 'border-t border-slate-100 pt-6' },
-                  renderValueWithSmallUnit(data?.population.agingRate, 'text-xl'),
-                  React.createElement('div', { className: 'text-[10px] text-slate-400 font-bold uppercase mt-1' }, '高齢化率 (65歳以上)')
+                h('div', { className: 'border-t border-slate-100 pt-6' },
+                  renderValueWithSmallUnit(data ? data.population.agingRate : '---', 'text-xl'),
+                  h('div', { className: 'text-[10px] text-slate-400 font-bold uppercase mt-1' }, '高齢化率 (65歳以上)')
                 )
               ),
 
-              // Budget Card
-              React.createElement('div', { className: 'bg-white rounded-2xl shadow-sm border border-slate-200 p-6' },
-                React.createElement('div', { className: 'flex items-center justify-between mb-6' },
-                  React.createElement('div', { className: 'flex items-center gap-2 text-brand font-bold text-sm' },
-                    React.createElement(Landmark, { className: 'w-4 h-4' }), ' 予算規模'
+              // Budget
+              h('div', { className: 'bg-white rounded-2xl shadow-sm border border-slate-200 p-6' },
+                h('div', { className: 'flex items-center justify-between mb-6' },
+                  h('div', { className: 'flex items-center gap-2 text-brand font-bold text-sm' },
+                    h(Lucide.Landmark, { size: 16 }), ' 予算規模'
                   ),
-                  React.createElement('span', { className: 'text-[10px] text-slate-300 font-bold uppercase tracking-widest' }, '2024年度')
+                  h('span', { className: 'text-[10px] text-slate-300 font-bold uppercase tracking-widest' }, '2024年度')
                 ),
-                React.createElement('div', { className: 'mb-2' },
-                  renderValueWithSmallUnit(data?.budget.amount, 'text-2xl')
+                h('div', { className: 'mb-2' },
+                  renderValueWithSmallUnit(data ? data.budget.amount : '---', 'text-2xl')
                 ),
-                React.createElement('p', { className: 'text-xs text-slate-400 leading-relaxed' }, data?.budget.description || '---')
+                h('p', { className: 'text-xs text-slate-400 leading-relaxed' }, data ? data.budget.description : '---')
               )
             ),
 
-            // Right Column
-            React.createElement('div', { className: 'lg:col-span-8 space-y-6' },
-              React.createElement('div', { className: 'bg-white rounded-2xl shadow-sm border border-slate-200 p-8' },
-                React.createElement('div', { className: 'flex items-center gap-3 mb-6' },
-                  React.createElement('div', { className: 'w-10 h-10 bg-emerald-50 rounded-xl flex items-center justify-center text-brand' },
-                    React.createElement(MapIcon, { className: 'w-5 h-5' })
+            // Right
+            h('div', { className: 'lg:col-span-8 space-y-6' },
+              h('div', { className: 'bg-white rounded-2xl shadow-sm border border-slate-200 p-8' },
+                h('div', { className: 'flex items-center gap-3 mb-6' },
+                  h('div', { className: 'w-10 h-10 bg-emerald-50 rounded-xl flex items-center justify-center text-brand' },
+                    h(Lucide.Map, { size: 20 })
                   ),
-                  React.createElement('h3', { className: 'text-lg font-bold text-slate-800' }, '観光・地域の特徴')
+                  h('h3', { className: 'text-lg font-bold text-slate-800' }, '観光・地域の特徴')
                 ),
-                React.createElement('p', { className: 'text-slate-600 leading-relaxed' }, data?.tourism || '検索結果がここに表示されます。')
+                h('p', { className: 'text-slate-600 leading-relaxed' }, data ? data.tourism : '検索結果がここに表示されます。')
               ),
 
-              React.createElement('div', { className: 'bg-white rounded-2xl shadow-sm border border-slate-200 p-8' },
-                React.createElement('div', { className: 'flex items-center gap-3 mb-8' },
-                  React.createElement('div', { className: 'w-10 h-10 bg-emerald-50 rounded-xl flex items-center justify-center text-brand' },
-                    React.createElement(UserCircle2, { className: 'w-5 h-5' })
+              h('div', { className: 'bg-white rounded-2xl shadow-sm border border-slate-200 p-8' },
+                h('div', { className: 'flex items-center gap-3 mb-8' },
+                  h('div', { className: 'w-10 h-10 bg-emerald-50 rounded-xl flex items-center justify-center text-brand' },
+                    h(Lucide.UserCircle2, { size: 20 })
                   ),
-                  React.createElement('h3', { className: 'text-lg font-bold text-slate-800' }, 'ゆかりのある人物')
+                  h('h3', { className: 'text-lg font-bold text-slate-800' }, 'ゆかりのある人物')
                 ),
-                React.createElement('div', { className: 'grid grid-cols-1 md:grid-cols-2 gap-4' },
-                  data?.people.map((person, i) => React.createElement('div', { key: i, className: 'bg-slate-50 rounded-xl p-6 border border-slate-100' },
-                    React.createElement('h4', { className: 'text-brand font-bold mb-2' }, person.name),
-                    React.createElement('p', { className: 'text-xs text-slate-500 leading-relaxed' }, person.bio)
-                  )) || React.createElement('div', { className: 'col-span-full py-12 text-center text-slate-300 italic text-sm' }, '人物情報がありません')
+                h('div', { className: 'grid grid-cols-1 md:grid-cols-2 gap-4' },
+                  data ? data.people.map((person, i) => h('div', { key: i, className: 'bg-slate-50 rounded-xl p-6 border border-slate-100' },
+                    h('h4', { className: 'text-brand font-bold mb-2' }, person.name),
+                    h('p', { className: 'text-xs text-slate-500 leading-relaxed' }, person.bio)
+                  )) : h('div', { className: 'col-span-full py-12 text-center text-slate-300 italic text-sm' }, '人物情報がありません')
                 )
               )
             )
@@ -496,15 +423,15 @@ AI市町村ナビ 制作委員会
         ),
 
         // Footer
-        React.createElement('footer', { className: 'py-8 px-6 text-center space-y-2' },
-          React.createElement('p', { className: 'text-[10px] text-slate-400 font-bold uppercase tracking-widest' }, '© 2024 AI市町村ナビ 制作委員会'),
-          React.createElement('p', { className: 'text-[9px] text-slate-300 italic' }, '※AI生成コンテンツには誤りが含まれる場合があります。重要な情報は公的機関の資料でご確認ください。')
+        h('footer', { className: 'py-8 px-6 text-center space-y-2' },
+          h('p', { className: 'text-[10px] text-slate-400 font-bold uppercase tracking-widest' }, '© 2024 AI市町村ナビ 制作委員会'),
+          h('p', { className: 'text-[9px] text-slate-300 italic' }, '※AI生成コンテンツには誤りが含まれる場合があります。重要な情報は公的機関の資料でご確認ください。')
         )
       );
     }
 
     const root = createRoot(document.getElementById('root'));
-    root.render(React.createElement(App));
+    root.render(h(App));
   </script>
 </body>
 </html>
